@@ -175,36 +175,100 @@ class TensileDataAnalyzerUI:
             st.warning("No experimental data found. Please run the analysis first.")
             return None, None
         
-        # Experiment selection
-        selected_experiment = st.selectbox(
-            "Select Experiment Folder:",
-            ["All"] + self.experiments,
-            help="Choose a specific experiment or view all data"
+        # Experiment selection - Multi-select
+        st.subheader("Select Experiment Folders")
+        selected_experiments = st.multiselect(
+            "Choose Experiment Folders:",
+            self.experiments,
+            default=self.experiments[:3] if len(self.experiments) > 3 else self.experiments,
+            help="Choose specific experiments to analyze (multiple selection allowed)"
         )
         
-        # Filter data based on experiment
-        if selected_experiment == "All":
-            filtered_data = self.main_data
-        else:
-            filtered_data = self.main_data[self.main_data['folder'].astype(str) == selected_experiment]
+        # Add "Select All" option
+        col1, col2 = st.columns([1, 4])
+        with col1:
+            if st.button("Select All Experiments"):
+                selected_experiments = self.experiments
+        with col2:
+            if st.button("Clear Selection"):
+                selected_experiments = []
         
-        # Sample selection
+        # Filter data based on experiment selection
+        if selected_experiments:
+            filtered_data = self.main_data[self.main_data['folder'].astype(str).isin(selected_experiments)]
+        else:
+            filtered_data = pd.DataFrame()  # Empty dataframe if no experiments selected
+            st.warning("Please select at least one experiment folder.")
+        
+        # Sample selection - Multi-select
         if not filtered_data.empty:
-            # Filter out NaN values and convert to string, then sort
+            st.subheader("Select Samples")
+            
+            # Get unique samples from filtered data
             unique_samples = filtered_data['sample_name'].dropna().astype(str).unique()
-            sample_options = ["All"] + sorted(unique_samples)
-            selected_sample = st.selectbox(
-                "Select Sample:",
-                sample_options,
-                help="Choose a specific sample or view all samples"
+            sorted_samples = sorted(unique_samples)
+            
+            selected_samples = st.multiselect(
+                "Choose Samples:",
+                sorted_samples,
+                default=sorted_samples[:5] if len(sorted_samples) > 5 else sorted_samples,
+                help="Choose specific samples to analyze (multiple selection allowed)"
             )
             
-            if selected_sample != "All":
-                filtered_data = filtered_data[filtered_data['sample_name'].astype(str) == selected_sample]
+            # Add "Select All" option for samples
+            sample_col1, sample_col2 = st.columns([1, 4])
+            with sample_col1:
+                if st.button("Select All Samples"):
+                    selected_samples = sorted_samples
+            with sample_col2:
+                if st.button("Clear Sample Selection"):
+                    selected_samples = []
+            
+            # Filter by selected samples
+            if selected_samples:
+                filtered_data = filtered_data[filtered_data['sample_name'].astype(str).isin(selected_samples)]
+            else:
+                filtered_data = pd.DataFrame()  # Empty dataframe if no samples selected
+                st.warning("Please select at least one sample.")
         else:
-            selected_sample = None
+            selected_samples = []
         
-        return selected_experiment, filtered_data
+        # Display selection summary
+        if not filtered_data.empty:
+            st.subheader("📋 Selection Summary")
+            
+            summary_col1, summary_col2, summary_col3 = st.columns(3)
+            
+            with summary_col1:
+                st.metric(
+                    label="Selected Experiments",
+                    value=len(selected_experiments)
+                )
+                with st.expander("View Selected Experiments"):
+                    for exp in selected_experiments:
+                        st.write(f"• {exp}")
+            
+            with summary_col2:
+                st.metric(
+                    label="Selected Samples",
+                    value=len(selected_samples)
+                )
+                with st.expander("View Selected Samples"):
+                    for sample in selected_samples:
+                        st.write(f"• {sample}")
+            
+            with summary_col3:
+                st.metric(
+                    label="Total Data Points",
+                    value=len(filtered_data)
+                )
+                # Show breakdown by experiment
+                with st.expander("Data Points by Experiment"):
+                    for exp in selected_experiments:
+                        count = len(filtered_data[filtered_data['folder'].astype(str) == exp])
+                        st.write(f"• {exp}: {count} samples")
+        
+        return selected_experiments, filtered_data
     
     def display_sample_comparison(self, data):
         """Display sample comparison and analysis"""
@@ -317,90 +381,320 @@ class TensileDataAnalyzerUI:
             st.warning("No stress-strain CSV files found for selected samples.")
             return
         
-        selected_curves = st.multiselect(
-            "Select Stress-Strain Curves to Display:",
-            sample_keys,
-            default=sample_keys[:5] if len(sample_keys) > 5 else sample_keys,
-            help="Select up to 10 curves for comparison"
-        )
+        # Add tabs for different analysis types
+        tab1, tab2 = st.tabs(["📊 Multi-Curve Comparison", "🔍 Two-Dataset Comparison with Cropping"])
         
-        if selected_curves:
-            # Load and plot stress-strain curves
-            fig = go.Figure()
+        with tab1:
+            st.subheader("Multi-Curve Comparison")
+            selected_curves = st.multiselect(
+                "Select Stress-Strain Curves to Display:",
+                sample_keys,
+                default=sample_keys[:5] if len(sample_keys) > 5 else sample_keys,
+                help="Select up to 10 curves for comparison"
+            )
             
-            for key in selected_curves[:10]:  # Limit to 10 curves
-                csv_file = self.csv_files_dir / f"stress_strain_{key}.csv"
-                if csv_file.exists():
-                    try:
-                        df = pd.read_csv(csv_file)
-                        
-                        # Find stress and strain columns
-                        stress_col = None
-                        strain_col = None
-                        
-                        for col in df.columns:
-                            if 'true stress' in col.lower():
-                                stress_col = col
-                            elif 'true strain' in col.lower():
-                                strain_col = col
-                        
-                        if stress_col and strain_col:
-                            # Limit data points for performance
-                            max_points = 500
-                            step = max(1, len(df) // max_points)
-                            
-                            strain = df[strain_col][::step]
-                            stress = df[stress_col][::step]
-                            
-                            fig.add_trace(go.Scatter(
-                                x=strain,
-                                y=stress,
-                                mode='lines',
-                                name=key,
-                                line=dict(width=2)
-                            ))
+            if selected_curves:
+                self._display_multi_curve_comparison(selected_curves, samples_with_data)
+        
+        with tab2:
+            st.subheader("Two-Dataset Comparison with Cropping")
+            self._display_two_dataset_comparison(sample_keys, samples_with_data)
+    
+    def _display_multi_curve_comparison(self, selected_curves, samples_with_data):
+        """Display multi-curve comparison (original functionality)"""
+        # Load and plot stress-strain curves
+        fig = go.Figure()
+        
+        for key in selected_curves[:10]:  # Limit to 10 curves
+            csv_file = self.csv_files_dir / f"stress_strain_{key}.csv"
+            if csv_file.exists():
+                try:
+                    df = pd.read_csv(csv_file)
                     
-                    except Exception as e:
-                        st.warning(f"Error loading {key}: {e}")
+                    # Find stress and strain columns
+                    stress_col = None
+                    strain_col = None
+                    
+                    for col in df.columns:
+                        if 'true stress' in col.lower():
+                            stress_col = col
+                        elif 'true strain' in col.lower():
+                            strain_col = col
+                    
+                    if stress_col and strain_col:
+                        # Limit data points for performance
+                        max_points = 500
+                        step = max(1, len(df) // max_points)
+                        
+                        strain = df[strain_col][::step]
+                        stress = df[stress_col][::step]
+                        
+                        fig.add_trace(go.Scatter(
+                            x=strain,
+                            y=stress,
+                            mode='lines',
+                            name=key,
+                            line=dict(width=2)
+                        ))
+                
+                except Exception as e:
+                    st.warning(f"Error loading {key}: {e}")
+        
+        if fig.data:
+            fig.update_layout(
+                title="True Stress-Strain Curves Comparison",
+                xaxis_title="True Strain (%)",
+                yaxis_title="True Stress (MPa)",
+                hovermode='x unified',
+                width=None,
+                height=600
+            )
             
-            if fig.data:
-                fig.update_layout(
-                    title="True Stress-Strain Curves Comparison",
-                    xaxis_title="True Strain (%)",
-                    yaxis_title="True Stress (MPa)",
-                    hovermode='x unified',
-                    width=None,
-                    height=600
-                )
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Add curve analysis
+            st.subheader("Curve Analysis")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.write("**Selected Curves:**")
+                for key in selected_curves:
+                    sample_info = samples_with_data[
+                        (samples_with_data['folder'] + '_' + samples_with_data['sample_name']) == key
+                    ]
+                    if not sample_info.empty:
+                        row = sample_info.iloc[0]
+                        current_status = "✅ With Current" if row.get('has_current', True) else "❌ No Current"
+                        st.write(f"• **{key}**: {current_status}")
+            
+            with col2:
+                st.write("**Curve Statistics:**")
+                st.write(f"• Number of curves: {len(selected_curves)}")
+                with_current = len([k for k in selected_curves if samples_with_data[
+                    (samples_with_data['folder'] + '_' + samples_with_data['sample_name']) == k
+                ]['has_current'].iloc[0] if not samples_with_data[
+                    (samples_with_data['folder'] + '_' + samples_with_data['sample_name']) == k
+                ].empty])
+                st.write(f"• With current: {with_current}")
+                st.write(f"• Without current: {len(selected_curves) - with_current}")
+    
+    def _display_two_dataset_comparison(self, sample_keys, samples_with_data):
+        """Display two-dataset comparison with cropping functionality"""
+        if len(sample_keys) < 2:
+            st.warning("At least 2 datasets are required for comparison.")
+            return
+        
+        # Dataset selection
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            dataset1 = st.selectbox(
+                "Select First Dataset:",
+                sample_keys,
+                key="dataset1",
+                help="Choose the first dataset for comparison"
+            )
+        
+        with col2:
+            dataset2 = st.selectbox(
+                "Select Second Dataset:",
+                [key for key in sample_keys if key != dataset1],
+                key="dataset2",
+                help="Choose the second dataset for comparison"
+            )
+        
+        if dataset1 and dataset2:
+            # Load both datasets
+            dataset1_df = self._load_stress_strain_data(dataset1)
+            dataset2_df = self._load_stress_strain_data(dataset2)
+            
+            if dataset1_df is not None and dataset2_df is not None:
+                # Find common columns
+                stress_col1, strain_col1 = self._find_stress_strain_columns(dataset1_df)
+                stress_col2, strain_col2 = self._find_stress_strain_columns(dataset2_df)
                 
-                st.plotly_chart(fig, use_container_width=True)
+                if stress_col1 and strain_col1 and stress_col2 and strain_col2:
+                    # Cropping controls
+                    st.subheader("🔧 Cropping Controls")
+                    
+                    crop_col1, crop_col2 = st.columns(2)
+                    
+                    with crop_col1:
+                        st.write(f"**{dataset1} Cropping:**")
+                        crop_start1 = st.slider(
+                            "Crop from start (%):",
+                            0, 50, 0,
+                            key="crop_start1",
+                            help="Percentage of data to remove from the beginning"
+                        )
+                        crop_end1 = st.slider(
+                            "Crop from end (%):",
+                            0, 50, 0,
+                            key="crop_end1",
+                            help="Percentage of data to remove from the end"
+                        )
+                    
+                    with crop_col2:
+                        st.write(f"**{dataset2} Cropping:**")
+                        crop_start2 = st.slider(
+                            "Crop from start (%):",
+                            0, 50, 0,
+                            key="crop_start2",
+                            help="Percentage of data to remove from the beginning"
+                        )
+                        crop_end2 = st.slider(
+                            "Crop from end (%):",
+                            0, 50, 0,
+                            key="crop_end2",
+                            help="Percentage of data to remove from the end"
+                        )
+                    
+                    # Apply cropping
+                    cropped_data1 = self._apply_cropping(dataset1_df, stress_col1, strain_col1, crop_start1, crop_end1)
+                    cropped_data2 = self._apply_cropping(dataset2_df, stress_col2, strain_col2, crop_start2, crop_end2)
+                    
+                    # Display comparison plot
+                    st.subheader("📊 Comparison Plot")
+                    
+                    fig = go.Figure()
+                    
+                    # Add first dataset
+                    fig.add_trace(go.Scatter(
+                        x=cropped_data1['strain'],
+                        y=cropped_data1['stress'],
+                        mode='lines',
+                        name=f"{dataset1} (cropped)",
+                        line=dict(width=3, color='#1f77b4')
+                    ))
+                    
+                    # Add second dataset
+                    fig.add_trace(go.Scatter(
+                        x=cropped_data2['strain'],
+                        y=cropped_data2['stress'],
+                        mode='lines',
+                        name=f"{dataset2} (cropped)",
+                        line=dict(width=3, color='#ff7f0e')
+                    ))
+                    
+                    fig.update_layout(
+                        title=f"Stress-Strain Comparison: {dataset1} vs {dataset2}",
+                        xaxis_title="True Strain (%)",
+                        yaxis_title="True Stress (MPa)",
+                        hovermode='x unified',
+                        width=None,
+                        height=600,
+                        legend=dict(
+                            orientation="h",
+                            yanchor="bottom",
+                            y=1.02,
+                            xanchor="right",
+                            x=1
+                        )
+                    )
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Display statistics
+                    st.subheader("📈 Comparison Statistics")
+                    
+                    stat_col1, stat_col2 = st.columns(2)
+                    
+                    with stat_col1:
+                        st.write(f"**{dataset1} Statistics:**")
+                        st.write(f"• Original data points: {len(dataset1_df)}")
+                        st.write(f"• Cropped data points: {len(cropped_data1['strain'])}")
+                        st.write(f"• Max stress: {cropped_data1['stress'].max():.2f} MPa")
+                        st.write(f"• Max strain: {cropped_data1['strain'].max():.2f}%")
+                        st.write(f"• Strain range: {cropped_data1['strain'].min():.3f}% to {cropped_data1['strain'].max():.2f}%")
+                    
+                    with stat_col2:
+                        st.write(f"**{dataset2} Statistics:**")
+                        st.write(f"• Original data points: {len(dataset2_df)}")
+                        st.write(f"• Cropped data points: {len(cropped_data2['strain'])}")
+                        st.write(f"• Max stress: {cropped_data2['stress'].max():.2f} MPa")
+                        st.write(f"• Max strain: {cropped_data2['strain'].max():.2f}%")
+                        st.write(f"• Strain range: {cropped_data2['strain'].min():.3f}% to {cropped_data2['strain'].max():.2f}%")
+                    
+                    # Export cropped data option
+                    st.subheader("💾 Export Cropped Data")
+                    
+                    export_col1, export_col2 = st.columns(2)
+                    
+                    with export_col1:
+                        if st.button("Download Dataset 1 (Cropped)", key="download1"):
+                            csv_data1 = pd.DataFrame({
+                                'True Strain (%)': cropped_data1['strain'],
+                                'True Stress (MPa)': cropped_data1['stress']
+                            })
+                            csv_string1 = csv_data1.to_csv(index=False)
+                            b64_1 = base64.b64encode(csv_string1.encode()).decode()
+                            href_1 = f'<a href="data:file/csv;base64,{b64_1}" download="{dataset1}_cropped.csv">Download CSV</a>'
+                            st.markdown(href_1, unsafe_allow_html=True)
+                    
+                    with export_col2:
+                        if st.button("Download Dataset 2 (Cropped)", key="download2"):
+                            csv_data2 = pd.DataFrame({
+                                'True Strain (%)': cropped_data2['strain'],
+                                'True Stress (MPa)': cropped_data2['stress']
+                            })
+                            csv_string2 = csv_data2.to_csv(index=False)
+                            b64_2 = base64.b64encode(csv_string2.encode()).decode()
+                            href_2 = f'<a href="data:file/csv;base64,{b64_2}" download="{dataset2}_cropped.csv">Download CSV</a>'
+                            st.markdown(href_2, unsafe_allow_html=True)
                 
-                # Add curve analysis
-                st.subheader("Curve Analysis")
-                
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.write("**Selected Curves:**")
-                    for key in selected_curves:
-                        sample_info = samples_with_data[
-                            (samples_with_data['folder'] + '_' + samples_with_data['sample_name']) == key
-                        ]
-                        if not sample_info.empty:
-                            row = sample_info.iloc[0]
-                            current_status = "✅ With Current" if row.get('has_current', True) else "❌ No Current"
-                            st.write(f"• **{key}**: {current_status}")
-                
-                with col2:
-                    st.write("**Curve Statistics:**")
-                    st.write(f"• Number of curves: {len(selected_curves)}")
-                    with_current = len([k for k in selected_curves if samples_with_data[
-                        (samples_with_data['folder'] + '_' + samples_with_data['sample_name']) == k
-                    ]['has_current'].iloc[0] if not samples_with_data[
-                        (samples_with_data['folder'] + '_' + samples_with_data['sample_name']) == k
-                    ].empty])
-                    st.write(f"• With current: {with_current}")
-                    st.write(f"• Without current: {len(selected_curves) - with_current}")
+                else:
+                    st.error("Could not find stress and strain columns in the selected datasets.")
+            else:
+                st.error("Could not load the selected datasets.")
+    
+    def _load_stress_strain_data(self, dataset_key):
+        """Load stress-strain data from CSV file"""
+        csv_file = self.csv_files_dir / f"stress_strain_{dataset_key}.csv"
+        if csv_file.exists():
+            try:
+                return pd.read_csv(csv_file)
+            except Exception as e:
+                st.error(f"Error loading {dataset_key}: {e}")
+                return None
+        else:
+            st.error(f"CSV file not found for {dataset_key}")
+            return None
+    
+    def _find_stress_strain_columns(self, df):
+        """Find stress and strain columns in the dataframe"""
+        stress_col = None
+        strain_col = None
+        
+        for col in df.columns:
+            if 'true stress' in col.lower():
+                stress_col = col
+            elif 'true strain' in col.lower():
+                strain_col = col
+        
+        return stress_col, strain_col
+    
+    def _apply_cropping(self, df, stress_col, strain_col, crop_start_pct, crop_end_pct):
+        """Apply cropping to the dataset"""
+        total_points = len(df)
+        
+        # Calculate crop indices
+        start_idx = int(total_points * crop_start_pct / 100)
+        end_idx = total_points - int(total_points * crop_end_pct / 100)
+        
+        # Ensure valid indices
+        start_idx = max(0, start_idx)
+        end_idx = min(total_points, end_idx)
+        end_idx = max(start_idx + 1, end_idx)  # Ensure at least one data point
+        
+        # Extract cropped data
+        cropped_strain = df[strain_col].iloc[start_idx:end_idx]
+        cropped_stress = df[stress_col].iloc[start_idx:end_idx]
+        
+        return {
+            'strain': cropped_strain,
+            'stress': cropped_stress
+        }
     
     def display_individual_sample_details(self, data):
         """Display detailed analysis for individual samples"""
@@ -498,7 +792,7 @@ class TensileDataAnalyzerUI:
             self.display_overview()
         
         elif page == "Experiment Selection":
-            selected_experiment, filtered_data = self.display_experiment_selector()
+            selected_experiments, filtered_data = self.display_experiment_selector()
             
             if filtered_data is not None and not filtered_data.empty:
                 st.success(f"Found {len(filtered_data)} samples for analysis")
@@ -513,17 +807,17 @@ class TensileDataAnalyzerUI:
                     st.metric("With Stress-Strain Data", len(filtered_data[filtered_data['has_stress_strain_data'] == True]))
         
         elif page == "Sample Comparison":
-            selected_experiment, filtered_data = self.display_experiment_selector()
+            selected_experiments, filtered_data = self.display_experiment_selector()
             if filtered_data is not None:
                 self.display_sample_comparison(filtered_data)
         
         elif page == "Stress-Strain Analysis":
-            selected_experiment, filtered_data = self.display_experiment_selector()
+            selected_experiments, filtered_data = self.display_experiment_selector()
             if filtered_data is not None:
                 self.display_stress_strain_analysis(filtered_data)
         
         elif page == "Individual Sample Details":
-            selected_experiment, filtered_data = self.display_experiment_selector()
+            selected_experiments, filtered_data = self.display_experiment_selector()
             if filtered_data is not None:
                 self.display_individual_sample_details(filtered_data)
         
